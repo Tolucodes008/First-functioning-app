@@ -1,27 +1,12 @@
 import pygame
 import sys
 from coordinates import positions, CYAN, GRAY, DARK_GRAY, OFF_WHITE
-from gameplay import Piece, draw_board, Player, PieceType, NonePiece
-
-
-print("nice")
-print("Board id:", id(draw_board))
-
-# Initialize pygame
-pygame.init()
-
-# Set up game window
-window = pygame.display.set_mode((2560, 1440)) 
-pygame.display.set_caption("Toluchess")
-# Define colors
+from main_gameplay import Piece, draw_board, Player, PieceType, Gamestate, NonePiece, Move, window, base_font, button_font
+from tournament import tournament
 
 
 
 
-
-# Load font
-base_font = pygame.font.SysFont("Segoe UI", 50)
-button_font = pygame.font.SysFont("Segoe UI", 30)
 
 
 class MainMenu:
@@ -53,8 +38,8 @@ class MainMenu:
 
         self.active = False
         self.rect_colour = CYAN
-        
-        self.menu_chess_board = pygame.image.load("Screenshot 2025-07-04 8.25.39 PM.png")
+        self.instruction_text = "Enter usernames here then press enter:"
+        self.menu_chess_board = pygame.image.load("/home/toluobadero/pygame-venv/app/Screenshot 2025-07-04 8.25.39 PM.png")
 #username can be entered as input to be stored in a text file
     def create_account(self, event):
         
@@ -76,14 +61,22 @@ class MainMenu:
                             with open("usernames.txt", "a") as file:
                                 file.write(self.username + "\n")
                                 file.close()
+                                self.instruction_text = "Enter usernames here then press enter:"
+                                self.rect_colour = CYAN
                                 self.username = self.username[:-(len(self.username))]
+                        
                         else:
                             self.username = self.username[:-(len(self.username))]
+                            self.instruction_text = "characters need to be greater than 5!!"
+
+                        self.active = False
+
+
                             
                                 
             self.screen.fill(DARK_GRAY)
             #write instructions for user
-            input_instruction = base_font.render("Enter usernames here", True, (255,255,255))
+            input_instruction = base_font.render(self.instruction_text, True, (255,255,255))
             self.screen.blit(input_instruction, (1000, 600))
                 # Draw username text
             pygame.draw.rect(self.screen, self.rect_colour, self.input_rect, 2)
@@ -102,6 +95,7 @@ class MainMenu:
         
                 
     def menu(self, event):
+            board = None
             self.screen.fill(DARK_GRAY)
             # Drawing the buttons and chess board
             self.screen.blit(self.menu_chess_board, (1500, 450))
@@ -120,6 +114,9 @@ class MainMenu:
             if event.type == pygame.MOUSEBUTTONDOWN:
                     if self.play_game_button.collidepoint(event.pos):
                         self.stage = "draw board"
+                    elif self.tourn_menu_button.collidepoint(event.pos):
+                        self.stage = "tournament menu"
+
 
         
        
@@ -174,7 +171,7 @@ class initial_board:
         if piece == NonePiece:
             return None
         else:
-            return initial_board().get_image(piece.colour(), piece.type())
+            return self.get_image(piece.colour(), piece.type())
 
       
 
@@ -195,30 +192,104 @@ class initial_board:
 # ---------------- Main Loop ----------------
 class gameloop:
     def __init__(self):
-        menu = MainMenu(window)
-        board = draw_board(window)
-        board.AddstartPieces()
-        image_loader = initial_board()
+        self.menu = MainMenu(window)
+        self.image_loader = initial_board()
+        self.board = None
+        self.tournament = None
+        self.previous_stage = None
+        self.game_updated = False
+    def create_new_tornament(self):
+        self.tournament = tournament(window)
+        return self.tournament
+    
+    def create_new_board(self):
+        self.board = draw_board(window)
+        self.board.AddstartPieces()
+        return self.board
+
+    def run(self):
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
-                
-                if menu.stage == "create account":
-                    menu.create_account(event)
-                elif menu.stage == "menu":
-                    menu.menu(event)
-                elif menu.stage == "draw board":
-                    board.initial(image_loader)
-                    board.boardgrid_click(event)
-                    
+
+                # Detect stage changes
+                if self.menu.stage != self.previous_stage:
+                    # reset per-stage flags
+                    if self.menu.stage in ["draw board", "menu", "table", "tournament menu"]:
+                        self.game_updated = False
+                    if self.menu.stage == "draw board":
+                        self.create_new_board()
+                        if self.tournament and not self.tournament.tournament_over:
+                            game_scheduled = self.tournament.schedule_games(self.board)
+                            if not game_scheduled:
+                                # Tournament ended, go to table
+                                self.menu.stage = "table"
+                    elif self.menu.stage == "tournament menu":
+                        self.create_new_tornament()
+                    elif self.menu.stage == "menu":
+                        self.board = None
+                        self.tournament = None
+
+                    self.previous_stage = self.menu.stage
+
+                # normal stage event handling
+                if self.menu.stage == "create account":
+                    self.menu.create_account(event)
+                elif self.menu.stage == "menu":
+                    self.menu.menu(event)
+                elif self.menu.stage == "tournament menu" and self.tournament:
+                    self.tournament.create_tournament(event, self.menu)
+                elif self.menu.stage == "table" and self.tournament:
+                    self.tournament.table_to_board(event, self.menu)
+                    if self.tournament.tournament_over:
+                        self.tournament.tournament_to_menu(event, self.menu)
+                # board events
+                if self.menu.stage == "draw board" and self.board:
+                    self.board.boardgrid_click(event)
+                    if self.board.promotion:
+                        self.board.handle_promotion(event)
+
+                    # if game just ended, update the tournament ONCE here (event loop)
+                    if self.board.gamestate.Isgameover():
+                        if not self.game_updated:
+                            if self.tournament:
+                                self.tournament.update_table(self.board)   # run once
+                            self.game_updated = True
+
+                        # handle *clicks* for whichever button is active
+                        if self.tournament:
+                            self.board.handle_go_to_table_click(self.menu, event)
+                        else:
+                            self.board.handle_go_to_menu_click(self.menu, event)
+
+            # ---------- render pass (always run, once per frame) ----------
+            if self.menu.stage == "draw board" and self.board:
+                self.board.initial(self.image_loader)
+                self.board.showHighlightedMoves()
+                self.board.points_for_pieces_taken()
+                self.board.timers()
+                self.board.gamestate.checkForgameover()
+                if self.board.promotion:
+                    self.board.draw_promotion_menu()
+                if self.board.gamestate.Isgameover():
+                    if self.tournament:
+                        self.board.draw_go_to_table_button()
+                    else:
+                        self.board.draw_go_to_menu_button()
+
+            if self.menu.stage == "tournament menu" and self.tournament:
+                self.tournament.tournament_render()
+
+
+            if self.menu.stage == "table" and self.tournament:
+                if self.tournament.tournament_over:
+                    self.tournament.tournament_over_screen()
+                else:
+                    self.tournament.draw_table()
+
             pygame.display.flip()
-
-gameloop()
-            
-            
-
-
-
-        
+    # Usage
+game = gameloop()
+game.run()
